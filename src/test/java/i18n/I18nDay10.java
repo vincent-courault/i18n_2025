@@ -7,6 +7,10 @@ import java.io.IOException;
 import java.net.URISyntaxException;
 import java.text.Normalizer;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -23,45 +27,54 @@ public class I18nDay10 extends Commun {
         List<String> inputs = lectureDuFichier(this, false);
         assertEquals(1413, traitement(inputs));
     }
+    private static final Map<String, Boolean> memo = new ConcurrentHashMap<>();
 
     public int traitement(List<String> inputs) {
-        int resultat = 0;
+        int resultat;
         boolean finHashed = false;
-        Map<String, String> passwordHashed = new HashMap<>();
-        List<String> passwordInput = new ArrayList<>();
+        Map<String, String> hashedPassword = new HashMap<>();
+        List<String> saisies = new ArrayList<>();
         for (String input : inputs) {
             if (!finHashed && !input.isEmpty()) {
-                passwordHashed.put(input.split(" ")[0], input.split(" ")[1]);
+                hashedPassword.put(input.split(" ")[0], input.split(" ")[1]);
             }
             if (input.isEmpty()) {
                 finHashed = true;
             }
             if (finHashed && !input.isEmpty()) {
-                passwordInput.add(input);
+                saisies.add(input);
             }
         }
-
-        Map<String, Boolean> memo = new HashMap<>();
-        for (String s : passwordInput) {
-            String[] input = s.split(" ");
-            String inputNormalized = Normalizer.normalize(input[1], Normalizer.Form.NFC);
-            List<String> variations = genereLesCombinaisons(inputNormalized);
-            for (String variation : variations) {
-                boolean test;
-                if (memo.containsKey(variation + input[0])) {
-                    test = memo.get(variation + input[0]);
-                } else {
-                    test = BCrypt.checkpw(variation, passwordHashed.get(input[0]));
-                    memo.put(variation + input[0], test);
-                }
-                if (test) {
-                    resultat++;
-                    break;
-                }
-            }
-        }
+        resultat = verifieSaisieEnParallele(saisies, hashedPassword);
         System.out.println(this.getClass().getSimpleName() + " " + name + " : " + resultat);
         return resultat;
+    }
+
+    public  int verifieSaisieEnParallele(List<String> saisieMotsDePasse, Map<String, String> hashedPassword) {
+        int availableThreads = Runtime.getRuntime().availableProcessors();
+        ExecutorService executor = Executors.newFixedThreadPool(availableThreads);
+
+        List<CompletableFuture<Integer>> futures = saisieMotsDePasse.stream()
+                .map(input -> CompletableFuture.supplyAsync(() -> verifieSaisie(input, hashedPassword), executor))
+                .toList();
+
+        int totalMatches = futures.stream().mapToInt(CompletableFuture::join).sum();
+        executor.shutdown();
+        return totalMatches;
+    }
+
+    private int verifieSaisie(String entry, Map<String, String> hashedPassword) {
+        String[] saisie = entry.split(" ");
+        String inputNormalized = Normalizer.normalize(saisie[1], Normalizer.Form.NFC);
+        List<String> variations = genereLesCombinaisons(inputNormalized);
+
+        for (String variation : variations) {
+            String cle = variation + saisie[0];
+            boolean isCorrect = memo.computeIfAbsent(cle, _ -> BCrypt.checkpw(variation, hashedPassword.get(saisie[0])));
+            if (isCorrect)
+                return 1; 
+        }
+        return 0;
     }
 
     // Génère toutes les formes Unicode possibles d'un caractère
